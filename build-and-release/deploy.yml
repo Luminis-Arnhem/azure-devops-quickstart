@@ -1,0 +1,51 @@
+parameters:
+  environment:
+  environmentLong:
+  tenant:
+  project:
+  variant:
+  azureSubscription:
+  artifactPackageName:
+  artifactName:
+  armTemplateFile:
+  armTemplateParametersFile:
+  resourceGroupLocation:
+
+jobs:
+  - deployment: Deployment
+    pool:
+      vmImage: "ubuntu-latest"
+
+    # This is used for release authorization. Variable is not used in script.
+    environment: "${{parameters.environmentLong}}"
+
+    variables:
+      prefix: "${{parameters.environment}${{parameters.tenant}}${{parameters.project}}"
+      resourceGroupName: "$(prefix)Rg${{parameters.variant}}"
+      appName: "$(prefix)Fa${{parameters.variant}}"
+
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+            - task: AzureResourceGroupDeployment@2
+              displayName: Deploy ARM template
+              inputs:
+                azureSubscription: "${{parameters.azureSubscription}}"
+                action: "Create Or Update Resource Group"
+                resourceGroupName: "$(resourceGroupName)"
+                location: "${{parameters.resourceGroupLocation}}"
+                csmFile: "$(Agent.BuildDirectory)/${{parameters.artifactPackageName}}/template/${{parameters.armTemplateFile}}"
+                csmParametersFile: "$(Agent.BuildDirectory)/${{parameters.artifactPackageName}}/template/${{parameters.armTemplateParametersFile}}"
+                deploymentMode: "incremental"
+                overrideParameters: |
+                  -dbAdminPassword "$(dbAdminPassword)"
+                deploymentOutputs: "armOutput"
+
+            - task: AzureWebApp@1
+              displayName: "Azure Web App Deploy"
+              inputs:
+                azureSubscription: "${{parameters.azureSubscription}}"
+                appType: "webAppLinux"
+                appName: "$(appname)"
+                package: "$(Agent.BuildDirectory)/${{parameters.artifactPackageName}}/release/${{parameters.artifactName}}"
