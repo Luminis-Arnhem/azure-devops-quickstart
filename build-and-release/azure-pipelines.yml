@@ -1,0 +1,101 @@
+trigger:
+  - master
+
+variables:
+  artifactPackageName: "MyProject"
+  artifactName: "MyProject.zip"
+  armTemplateFolder: ".azure"
+  armTemplateFile: "azuredeploy.json"
+
+  tenant: "Customer1"
+  project: "MyProject"
+  resourceGroupLocation: "West Europe"
+
+stages:
+  - stage: Build
+    jobs:
+      - job: BuildCode
+        displayName: Build the application
+        pool:
+          vmImage: "ubuntu-latest"
+
+        # variables for this stage
+        variables:
+          resourceGroupName: "t$(tenant)$(project)Rg01"
+          armTemplateParametersFile: "azuredeploy.parameters.test.json"
+
+        steps:
+          - task: AzureResourceGroupDeployment@2
+            displayName: Verify ARM template
+            inputs:
+              azureSubscription: "<spn4Test>"
+              action: "Create Or Update Resource Group"
+              resourceGroupName: "$(resourceGroupName)"
+              location: "$(resourceGroupLocation)"
+              csmFile: "$(armTemplateFolder)/$(armTemplateFile)"
+              csmParametersFile: "$(armTemplateFolder)/azuredeploy.parameters.test.json"
+              overrideParameters: |
+                -dbAdminPassword dummy
+              deploymentMode: "Validation"
+
+          - task: CopyFiles@2
+            displayName: "Copy arm templates to: artifactstagingdirectory"
+            inputs:
+              sourceFolder: $(armTemplateFolder)
+              targetFolder: "$(build.artifactstagingdirectory)/template"
+
+          - task: GitVersion@5
+            displayName: GitVersion
+            inputs:
+              runtime: "core"
+              additionalArguments: "/output buildserver"
+
+          - task: DotNetCoreCLI@2
+            displayName: Restore
+            inputs:
+              command: restore
+              projects: "**/*.sln"
+              feedsToUse: "select"
+
+          - task: DotNetCoreCLI@2
+            displayName: Build
+            inputs:
+              publishWebProjects: false
+              command: publish
+              projects: "**/MyProject.csproj"
+              versioningScheme: byEnvVar
+              versionEnvVar: "GitVersion.SemVer"
+              arguments: "--configuration Release --output $(Build.ArtifactStagingDirectory)/release /p:AssemblyVersion=$(GitVersion.MajorMinorPatch) /p:Version=$(GitVersion.SemVer)"
+
+          - task: DotNetCoreCLI@2
+            displayName: Test
+            inputs:
+              command: test
+              projects: "**/*Tests.csproj"
+              arguments: "--collect:'Code Coverage'"
+
+          - publish: $(Build.ArtifactStagingDirectory)
+            artifact: $(artifactPackageName)
+
+  - stage: Deployment_To_Test
+    condition: and(succeeded(), eq(variables["Build.SourceBranch"], "refs/heads/master"))
+    displayName: Deploying to test
+    variables:
+      - group: <name of test-variablegroup in library>
+    dependsOn:
+      - Build
+
+    jobs:
+      - template: deploy.yml
+        parameters:
+          environment: "t"
+          environmentLong: "test"
+          tenant: "$(tenant)"
+          project: "$(project)"
+          variant: "01"
+          azureSubscription: "<spn>"
+          artifactPackageName: "$(artifactPackageName)"
+          artifactName: "$(artifactName)"
+          armTemplateFile: "$(armTemplateFile)"
+          armTemplateParametersFile: "azuredeploy.parameters.test.json"
+          resourceGroupLocation: "$(resourceGroupLocation)"
